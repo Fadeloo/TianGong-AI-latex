@@ -10,19 +10,25 @@ from docx.shared import Pt
 from docx.enum.style import WD_STYLE_TYPE
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
-from nougat_latex_processor import process_images_to_latex  # Import your nougat_latex_processor module
+from nougat_latex_processor import (
+    process_images_to_latex,
+)  # Import your nougat_latex_processor module
 
 # Load environment variables from .env file
 load_dotenv()
 
-# Get API credentials from environment variables
+# Get API credentials and directory paths from environment variables
 TEXTIN_API_ID = os.getenv("TEXTIN_API_ID")
 TEXTIN_API_CODE = os.getenv("TEXTIN_API_CODE")
+INPUT_DIRECTORY = os.getenv("INPUT_DIRECTORY")
+OUTPUT_DIRECTORY = os.getenv("OUTPUT_DIRECTORY")
+
 
 # Read file content
 def get_file_content(filePath):
     with open(filePath, "rb") as fp:
         return fp.read()
+
 
 # PDF parsing
 # Uses the TextIn API, you need to apply for an account and password, refer to the website: https://www.textin.com/document/pdf_to_markdown
@@ -46,22 +52,25 @@ class CommonOcr(object):
         except Exception as e:
             return e
 
+
 # Download image and save to local
 def download_and_save_image(image_url, save_dir):
     response = requests.get(image_url)
     if response.status_code == 200:
         file_path = os.path.join(save_dir, os.path.basename(image_url))
-        with open(file_path, 'wb') as file:
+        with open(file_path, "wb") as file:
             file.write(response.content)
         return file_path
     else:
         print("Unable to download image")
         return None
 
+
 # Delete local file
 def delete_file(file_path):
     if os.path.exists(file_path):
         os.remove(file_path)
+
 
 # Generate table in docx
 def html_table_to_docx(html_content, doc):
@@ -77,7 +86,7 @@ def html_table_to_docx(html_content, doc):
         for cell in rows[0].find_all(["td", "th"]):
             column_num += int(cell.get("colspan", 1))
         word_table = doc.add_table(rows=len(rows), cols=column_num)
-        word_table.style = '表格'  # Set table style
+        word_table.style = "Table Grid"  # Set table style
 
         # Record merged cell positions and spans
         merged_cells = []
@@ -125,17 +134,19 @@ def html_table_to_docx(html_content, doc):
             cell_2nd = word_table.rows[merged_pairs[1][0]].cells[merged_pairs[1][1]]
             cell_1st.merge(cell_2nd)
 
+
 # Create or get "No Spacing" style
 def get_no_spacing_style(doc):
     styles = doc.styles
     if "No Spacing" not in styles:
         style = styles.add_style("No Spacing", WD_STYLE_TYPE.PARAGRAPH)
-        style.font.name = 'Calibri'
+        style.font.name = "Calibri"
         style.font.size = Pt(11)
         style.paragraph_format.space_after = Pt(0)
         style.paragraph_format.space_before = Pt(0)
         style.paragraph_format.line_spacing = Pt(1)
     return styles["No Spacing"]
+
 
 # Generate docx document
 def get_title_level(body_text):
@@ -149,6 +160,7 @@ def get_title_level(body_text):
             except:
                 title_level = []
     return title_level
+
 
 def docs_output(doc, list_name, temp_dir):
     is_main_body = 0
@@ -189,11 +201,17 @@ def docs_output(doc, list_name, temp_dir):
         # Image
         elif list_name[i]["type"] == "image":
             image_url = list_name[i]["image_url"]
-            image_path = download_and_save_image(image_url, temp_dir)  # Download image and save to temporary directory
+            image_path = download_and_save_image(
+                image_url, temp_dir
+            )  # Download image and save to temporary directory
             if image_path:
-                latex_results = process_images_to_latex(img_dir=temp_dir)  # Process downloaded images
+                latex_results = process_images_to_latex(
+                    img_dir=temp_dir
+                )  # Process downloaded images
                 for latex in latex_results:
-                    doc.add_paragraph(latex, style=no_spacing_style)  # Add LaTeX code to document
+                    doc.add_paragraph(
+                        latex, style=no_spacing_style
+                    )  # Add LaTeX code to document
                 delete_file(image_path)  # Delete downloaded image file
         # Table
         elif list_name[i]["type"] == "table":
@@ -202,6 +220,7 @@ def docs_output(doc, list_name, temp_dir):
             html_table_to_docx(html_table_str, doc)
         else:
             print("New type found: " + list_name[i]["type"])
+
 
 # Process all files in the specified directory
 def process_all_files_in_directory(input_directory, output_directory):
@@ -222,15 +241,19 @@ def process_all_files_in_directory(input_directory, output_directory):
                 try:
                     doc = Document()
                     docs_output(doc, data_list, temp_dir)
-                    output_file_path = os.path.join(output_directory, f"{os.path.splitext(os.path.basename(file_path))[0]}.docx")
+                    output_file_path = os.path.join(
+                        output_directory,
+                        f"{os.path.splitext(os.path.basename(file_path))[0]}.docx",
+                    )
                     doc.save(output_file_path)
-                    print(f"{os.path.basename(file_path)} document generated successfully!")
+                    print(
+                        f"{os.path.basename(file_path)} document generated successfully!"
+                    )
                 except Exception as e:
                     print(f"{os.path.basename(file_path)} document generation failed")
                     print(e)
 
+
 # Main function
 if __name__ == "__main__":
-    input_directory = "/home/yanghang/projects/nougat-latex-ocr/file"
-    output_directory = "/home/yanghang/projects/nougat-latex-ocr/results"
-    process_all_files_in_directory(input_directory, output_directory)
+    process_all_files_in_directory(INPUT_DIRECTORY, OUTPUT_DIRECTORY)
