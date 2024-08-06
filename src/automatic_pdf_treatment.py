@@ -3,9 +3,8 @@ import json
 import os
 import glob
 import tempfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from docx import Document
-from docx.oxml.ns import qn
-from docx.oxml import OxmlElement
 from docx.shared import Pt
 from docx.enum.style import WD_STYLE_TYPE
 from bs4 import BeautifulSoup
@@ -31,7 +30,6 @@ def get_file_content(filePath):
 
 
 # PDF parsing
-# Uses the TextIn API, you need to apply for an account and password, refer to the website: https://www.textin.com/document/pdf_to_markdown
 class CommonOcr(object):
     def __init__(self, img_path):
         self._app_id = TEXTIN_API_ID
@@ -39,14 +37,10 @@ class CommonOcr(object):
         self._img_path = img_path
 
     def recognize(self):
-        # General document parsing
-        url = "https://api.textin.com/ai/service/v1/pdf_to_markdown"
-        url = url + "?" + "get_image=objects"
-        head = {}
+        url = "https://api.textin.com/ai/service/v1/pdf_to_markdown?get_image=objects"
+        head = {"x-ti-app-id": self._app_id, "x-ti-secret-code": self._secret_code}
         try:
             image = get_file_content(self._img_path)
-            head["x-ti-app-id"] = self._app_id
-            head["x-ti-secret-code"] = self._secret_code
             result = requests.post(url, data=image, headers=head)
             return result
         except Exception as e:
@@ -72,6 +66,30 @@ def delete_file(file_path):
         os.remove(file_path)
 
 
+# Create or get custom table and paragraph styles
+def create_custom_styles(doc):
+    styles = doc.styles
+    if "CustomTableStyle" not in styles:
+        table_style = styles.add_style("CustomTableStyle", WD_STYLE_TYPE.TABLE)
+        table_style.font.name = "宋体"
+        table_style.font.size = Pt(10)
+        table_style.paragraph_format.space_before = Pt(0)
+        table_style.paragraph_format.space_after = Pt(0)
+        table_style.paragraph_format.line_spacing = 1.5
+
+    if "CustomTable" not in styles:
+        paragraph_style = styles.add_style(
+            "CustomTable", WD_STYLE_TYPE.PARAGRAPH
+        )
+        paragraph_style.font.name = "宋体"
+        paragraph_style.font.size = Pt(10)
+        paragraph_style.paragraph_format.space_before = Pt(0)
+        paragraph_style.paragraph_format.space_after = Pt(0)
+        paragraph_style.paragraph_format.line_spacing = 1.5
+
+    return styles["CustomTableStyle"], styles["CustomTable"]
+
+
 # Generate table in docx
 def html_table_to_docx(html_content, doc):
     # Parse table
@@ -86,7 +104,19 @@ def html_table_to_docx(html_content, doc):
         for cell in rows[0].find_all(["td", "th"]):
             column_num += int(cell.get("colspan", 1))
         word_table = doc.add_table(rows=len(rows), cols=column_num)
-        word_table.style = "Table Grid"  # Set table style
+
+        # Set table and paragraph styles explicitly
+        table_style, paragraph_style = create_custom_styles(doc)
+        word_table.style = table_style
+
+        # Apply paragraph style to each cell
+        for row in word_table.rows:
+            for cell in row.cells:
+                for paragraph in cell.paragraphs:
+                    paragraph.style = paragraph_style
+
+        # Validate table style application
+        print(f"Applied table style: {word_table.style.name}")
 
         # Record merged cell positions and spans
         merged_cells = []
@@ -112,6 +142,10 @@ def html_table_to_docx(html_content, doc):
                 # Write cell content first
                 word_cell = word_row.cells[cell_idx]
                 word_cell.text = cell.get_text(strip=True)
+
+                # Apply paragraph style to cell paragraphs
+                for paragraph in word_cell.paragraphs:
+                    paragraph.style = paragraph_style
 
                 # Record merged cells
                 if colspan > 1 or rowspan > 1:
@@ -222,36 +256,49 @@ def docs_output(doc, list_name, temp_dir):
             print("New type found: " + list_name[i]["type"])
 
 
+# Process a single file
+def process_single_file(file_path, output_directory):
+    with tempfile.TemporaryDirectory() as temp_dir:
+        response = CommonOcr(file_path)
+        try:
+            pdf_result = response.recognize()
+            data_dict = json.loads(pdf_result.text)
+            data_list = data_dict["result"]["detail"]
+            print(f"{os.path.basename(file_path)} parsing completed")
+        except Exception as e:
+            print(f"{os.path.basename(file_path)} parsing failed")
+            print(e)
+            return
+
+        try:
+            doc = Document()
+            docs_output(doc, data_list, temp_dir)
+            output_file_path = os.path.join(
+                output_directory,
+                f"{os.path.splitext(os.path.basename(file_path))[0]}.docx",
+            )
+            doc.save(output_file_path)
+            print(f"{os.path.basename(file_path)} document generated successfully!")
+        except Exception as e:
+            print(f"{os.path.basename(file_path)} document generation failed")
+            print(e)
+
+
 # Process all files in the specified directory
 def process_all_files_in_directory(input_directory, output_directory):
-    with tempfile.TemporaryDirectory() as temp_dir:
+    with ThreadPoolExecutor() as executor:
+        futures = []
         for file_path in glob.glob(os.path.join(input_directory, "*")):
             if os.path.isfile(file_path):
-                response = CommonOcr(file_path)
-                try:
-                    pdf_result = response.recognize()
-                    data_dict = json.loads(pdf_result.text)
-                    data_list = data_dict["result"]["detail"]
-                    print(f"{os.path.basename(file_path)} parsing completed")
-                except Exception as e:
-                    print(f"{os.path.basename(file_path)} parsing failed")
-                    print(e)
-                    continue
+                futures.append(
+                    executor.submit(process_single_file, file_path, output_directory)
+                )
 
-                try:
-                    doc = Document()
-                    docs_output(doc, data_list, temp_dir)
-                    output_file_path = os.path.join(
-                        output_directory,
-                        f"{os.path.splitext(os.path.basename(file_path))[0]}.docx",
-                    )
-                    doc.save(output_file_path)
-                    print(
-                        f"{os.path.basename(file_path)} document generated successfully!"
-                    )
-                except Exception as e:
-                    print(f"{os.path.basename(file_path)} document generation failed")
-                    print(e)
+        for future in as_completed(futures):
+            try:
+                future.result()
+            except Exception as e:
+                print(f"Error processing file: {e}")
 
 
 # Main function
