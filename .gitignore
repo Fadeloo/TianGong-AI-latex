@@ -99,3 +99,9 @@ Network Trash Folder
 Temporary Items
 .apdisk
 
+# Environment
+.venv
+.env
+
+# Local files
+file
